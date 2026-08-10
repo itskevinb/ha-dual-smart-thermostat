@@ -137,7 +137,7 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
             if hvac_mode in device.hvac_modes:
                 device.hvac_mode = hvac_mode
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode):
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode, force: bool = True):
         _LOGGER.info(
             "Attempting to set hvac mode to %s of %s", hvac_mode, self.hvac_modes
         )
@@ -163,7 +163,7 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
 
         self.set_sub_devices_hvac_mode(hvac_mode)
 
-        await self.async_control_hvac(force=True)
+        await self.async_control_hvac(force=force)
 
         _LOGGER.info("Hvac mode set to %s", self._hvac_mode)
 
@@ -184,7 +184,20 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
                 await device.async_control_hvac(time, force)
                 self._hvac_action_reason = device.HVACActionReason
             elif device.is_active:
-                await device.async_turn_off()
+                # When this is an automatic mode transition (force=False,
+                # e.g. the auto-priority evaluator flipping between
+                # cooling/fan on sensor jitter) and the device hasn't run
+                # for min_cycle_duration yet, hold off turning it off to
+                # avoid short-cycling the equipment. ran_long_enough() reads
+                # the real switch entity state, not the is_active cache.
+                # force=True (user-initiated mode changes) still acts
+                # immediately, same as before.
+                if (
+                    force
+                    or not device.min_cycle_duration
+                    or device.hvac_controller.ran_long_enough()
+                ):
+                    await device.async_turn_off()
 
             # self._hvac_action_reason = device.HVACActionReason
 

@@ -1777,7 +1777,7 @@ class DualSmartThermostat(ClimateEntity, RestoreEntity):
                     self.features.is_range_mode,
                 )
                 self._target_humidity = self.environment.target_humidity
-            await self.hvac_device.async_set_hvac_mode(decision.next_mode)
+            await self.hvac_device.async_set_hvac_mode(decision.next_mode, force=False)
 
         await self.hvac_device.async_control_hvac(time=time, force=force)
 
