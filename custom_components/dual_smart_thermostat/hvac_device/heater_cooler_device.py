@@ -114,7 +114,7 @@ class HeaterCoolerDevice(MultiHvacDevice):
             tolerance_device = ToleranceDevice.AUTO
         return too_cold, too_hot, tolerance_device
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode):
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode, force: bool = True):
 
         _LOGGER.debug("async_set_hvac_mode %s", hvac_mode)
         if hvac_mode == HVACMode.HEAT_COOL:
@@ -122,7 +122,7 @@ class HeaterCoolerDevice(MultiHvacDevice):
             self.heater_device.hvac_mode = HVACMode.HEAT
             self.cooler_device.hvac_mode = HVACMode.COOL
 
-        await super().async_set_hvac_mode(hvac_mode)
+        await super().async_set_hvac_mode(hvac_mode, force=force)
 
     async def _async_control_heat_cool(self, time=None, force=False) -> None:
         """Check if we need to turn heating or cooling on or off."""
@@ -175,12 +175,26 @@ class HeaterCoolerDevice(MultiHvacDevice):
         if too_cold:
             await self.heater_device.async_control_hvac(time, force)
             self._hvac_action_reason = self.heater_device.HVACActionReason
-            if self.cooler_device.is_active:
+            cooler_min_cycle = getattr(self.cooler_device, "min_cycle_duration", None)
+            cooler_controller = getattr(self.cooler_device, "hvac_controller", None)
+            if self.cooler_device.is_active and (
+                force
+                or not cooler_min_cycle
+                or cooler_controller is None
+                or cooler_controller.ran_long_enough()
+            ):
                 await self.cooler_device.async_turn_off()
         elif too_hot:
             await self.cooler_device.async_control_hvac(time, force)
             self._hvac_action_reason = self.cooler_device.HVACActionReason
-            if self.heater_device.is_active:
+            heater_min_cycle = getattr(self.heater_device, "min_cycle_duration", None)
+            heater_controller = getattr(self.heater_device, "hvac_controller", None)
+            if self.heater_device.is_active and (
+                force
+                or not heater_min_cycle
+                or heater_controller is None
+                or heater_controller.ran_long_enough()
+            ):
                 await self.heater_device.async_turn_off()
         else:
             await self.async_turn_off_all(time)

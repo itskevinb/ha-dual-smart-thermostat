@@ -191,11 +191,17 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
                 # avoid short-cycling the equipment. ran_long_enough() reads
                 # the real switch entity state, not the is_active cache.
                 # force=True (user-initiated mode changes) still acts
-                # immediately, same as before.
+                # immediately, same as before. `device` may itself be a
+                # composite (e.g. CoolerFanDevice), which has neither
+                # attribute - getattr treats that as "no protection at this
+                # level", same as the pre-existing unconditional behavior.
+                min_cycle = getattr(device, "min_cycle_duration", None)
+                controller = getattr(device, "hvac_controller", None)
                 if (
                     force
-                    or not device.min_cycle_duration
-                    or device.hvac_controller.ran_long_enough()
+                    or not min_cycle
+                    or controller is None
+                    or controller.ran_long_enough()
                 ):
                     await device.async_turn_off()
 
