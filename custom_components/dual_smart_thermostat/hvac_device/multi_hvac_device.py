@@ -137,7 +137,7 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
             if hvac_mode in device.hvac_modes:
                 device.hvac_mode = hvac_mode
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode):
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode, force: bool = True):
         _LOGGER.info(
             "Attempting to set hvac mode to %s of %s", hvac_mode, self.hvac_modes
         )
@@ -163,7 +163,7 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
 
         self.set_sub_devices_hvac_mode(hvac_mode)
 
-        await self.async_control_hvac(force=True)
+        await self.async_control_hvac(force=force)
 
         _LOGGER.info("Hvac mode set to %s", self._hvac_mode)
 
@@ -183,8 +183,33 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
             if self.hvac_mode in device.hvac_modes:
                 await device.async_control_hvac(time, force)
                 self._hvac_action_reason = device.HVACActionReason
-            elif device.is_active:
-                await device.async_turn_off()
+            else:
+                # Fix for https://github.com/swingerman/ha-dual-smart-thermostat/issues/632:
+                # unconditionally turn off sub-devices that don't handle the
+                # current top-level hvac_mode, instead of gating on their
+                # is_active cache (which can desync from the real switch
+                # state and leave a relay stuck energized).
+                #
+                # Exception: when this is an automatic mode transition
+                # (force=False, e.g. the auto-priority evaluator flipping
+                # between cooling/fan on sensor jitter) and the device hasn't
+                # run for min_cycle_duration yet, hold off turning it off.
+                # ran_long_enough() reads the real switch entity state (not
+                # the is_active cache), so this doesn't reintroduce #632.
+                # force=True (user-initiated mode changes) still acts
+                # immediately, same as before. `device` may itself be a
+                # composite (e.g. CoolerFanDevice), which has neither
+                # attribute - getattr treats that as "no protection at this
+                # level", same as the pre-existing unconditional behavior.
+                min_cycle = getattr(device, "min_cycle_duration", None)
+                controller = getattr(device, "hvac_controller", None)
+                if (
+                    force
+                    or not min_cycle
+                    or controller is None
+                    or controller.ran_long_enough()
+                ):
+                    await device.async_turn_off()
 
             # self._hvac_action_reason = device.HVACActionReason
 

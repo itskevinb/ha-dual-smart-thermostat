@@ -91,7 +91,6 @@ from .const import (
     CONF_FAN_HOT_TOLERANCE_TOGGLE,
     CONF_FAN_MODE,
     CONF_FAN_ON_WITH_AC,
-    CONF_FAN_ON_WITH_HEATER,
     CONF_FLOOR_SENSOR,
     CONF_HEAT_COOL_MODE,
     CONF_HEAT_PUMP_COOLING,
@@ -180,7 +179,6 @@ FAN_MODE_SCHEMA = {
     vol.Optional(CONF_FAN): cv.entity_id,
     vol.Optional(CONF_FAN_MODE): cv.boolean,
     vol.Optional(CONF_FAN_ON_WITH_AC): cv.boolean,
-    vol.Optional(CONF_FAN_ON_WITH_HEATER): cv.boolean,
     vol.Optional(CONF_FAN_HOT_TOLERANCE): vol.All(
         vol.Coerce(float), vol.Range(min=0, min_included=False)
     ),
@@ -1777,7 +1775,7 @@ class DualSmartThermostat(ClimateEntity, RestoreEntity):
                     self.features.is_range_mode,
                 )
                 self._target_humidity = self.environment.target_humidity
-            await self.hvac_device.async_set_hvac_mode(decision.next_mode)
+            await self.hvac_device.async_set_hvac_mode(decision.next_mode, force=False)
 
         await self.hvac_device.async_control_hvac(time=time, force=force)
 

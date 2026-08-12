@@ -137,10 +137,29 @@ class CoolerFanDevice(MultiHvacDevice):
                     await self._async_control_cooler(time, force)
 
             case HVACMode.FAN_ONLY:
-                if self.cooler_device.is_active:
-                    await self.cooler_device.async_turn_off()
-                await self.fan_device.async_control_hvac(time, force)
-                self.HVACActionReason = self.fan_device.HVACActionReason
+                # FAN_ONLY-branch counterpart of the issue #385 fix used in
+                # _async_control_cooler above: a top-level AutoModeEvaluator
+                # flip to FAN_ONLY has no time-based hysteresis (just a
+                # threshold re-check every tick), so without this guard a
+                # sensor bouncing across the hot_tolerance boundary yanks the
+                # cooler relay off before min_cycle_duration elapses, then
+                # the next flip back to COOL turns it right back on.
+                has_cooler_run_long_enough = (
+                    self.cooler_device.hvac_controller.ran_long_enough()
+                )
+                if self.cooler_device.is_on and not has_cooler_run_long_enough:
+                    _LOGGER.debug(
+                        "Cooler has not run long enough at: %s",
+                        datetime.now(timezone.utc),
+                    )
+                    self.HVACActionReason = (
+                        HVACActionReason.MIN_CYCLE_DURATION_NOT_REACHED
+                    )
+                else:
+                    if self.cooler_device.is_active:
+                        await self.cooler_device.async_turn_off()
+                    await self.fan_device.async_control_hvac(time, force)
+                    self.HVACActionReason = self.fan_device.HVACActionReason
             case HVACMode.OFF:
                 await self.async_turn_off_all(time=time)
                 self.HVACActionReason = HVACActionReason.NONE
@@ -170,10 +189,26 @@ class CoolerFanDevice(MultiHvacDevice):
         has_cooler_run_long_enough = (
             self.cooler_device.hvac_controller.ran_long_enough()
         )
+        has_fan_run_long_enough = self.fan_device.hvac_controller.ran_long_enough()
 
         if self.cooler_device.is_on and not has_cooler_run_long_enough:
             _LOGGER.debug(
                 "Cooler has not run long enough at: %s",
+                datetime.now(timezone.utc),
+            )
+            self.HVACActionReason = HVACActionReason.MIN_CYCLE_DURATION_NOT_REACHED
+            return
+
+        # Fix for https://github.com/swingerman/ha-dual-smart-thermostat/issues/385:
+        # the cooler above is protected from being switched off before its
+        # min_cycle_duration elapses, but the fan never was - so it could be
+        # flipped on then immediately back off every time cur_temp ticked
+        # across the fan-tolerance boundary. Apply the same protection here,
+        # symmetrically, before letting the temperature reading move us out
+        # of the fan-only branch.
+        if self.fan_device.is_on and not is_within_fan_tolerance and not has_fan_run_long_enough:
+            _LOGGER.debug(
+                "Fan has not run long enough at: %s",
                 datetime.now(timezone.utc),
             )
             self.HVACActionReason = HVACActionReason.MIN_CYCLE_DURATION_NOT_REACHED
