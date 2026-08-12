@@ -286,12 +286,13 @@ class AutoModeEvaluator:
                 reason=HVACActionReason.AUTO_PRIORITY_TEMPERATURE,
             )
 
-        # Priority 9 (comfort fan band).
-        if self._features.is_configured_for_fan_mode and self._fan_band(env):
-            return AutoDecision(
-                next_mode=HVACMode.FAN_ONLY,
-                reason=HVACActionReason.AUTO_PRIORITY_COMFORT,
-            )
+        # Priority 9 (comfort fan band) retired 2026-08-12 at Kevin's
+        # request - fan_hot_tolerance no longer picks FAN_ONLY as a
+        # stand-in for COOL here. CoolerFanDevice still runs the fan as a
+        # fixed post-cooling run-on window, just not gated through mode
+        # selection anymore. _fan_band()/_goal_pending's FAN_ONLY branch
+        # are left in place - still load-bearing if free-cooling (priority
+        # 8, outside-sensor-driven) ever picks FAN_ONLY, unrelated to this.
 
         # Priority 10 (idle).
         idle_reason = HVACActionReason.TARGET_TEMP_REACHED

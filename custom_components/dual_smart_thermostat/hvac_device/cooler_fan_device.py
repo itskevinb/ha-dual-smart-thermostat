@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Callable
 
@@ -18,6 +18,14 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CoolerFanDevice(MultiHvacDevice):
+
+    # Kevin, 2026-08-12: "get rid of the fan unless it's to run for 15 mins
+    # after AC has hit temp" - replaces the old fan_hot_tolerance "try fan
+    # before AC" comfort band. The fan is cooler-support only now: it runs
+    # for this fixed window immediately after the cooler satisfies its
+    # target, purely for post-cooling air circulation, never as a
+    # substitute for the compressor.
+    _FAN_RUNON_MINUTES = 15
 
     def __init__(
         self,
@@ -46,6 +54,7 @@ class CoolerFanDevice(MultiHvacDevice):
             _LOGGER.error("Fan or cooler device is not found")
 
         self._set_fan_hot_tolerance_on_state()
+        self._fan_runon_until: datetime | None = None
 
     def _set_fan_hot_tolerance_on_state(self):
         if self._features.fan_hot_tolerance_on_entity is not None:
@@ -173,28 +182,9 @@ class CoolerFanDevice(MultiHvacDevice):
         self.HVACActionReason = self.cooler_device.HVACActionReason
 
     async def _async_control_cooler(self, time=None, force=False):
-        is_within_fan_tolerance = self.environment.is_within_fan_tolerance(
-            self.fan_device.target_env_attr
-        )
-        is_urgently_above_fan_tolerance = (
-            self.environment.is_urgently_above_fan_tolerance(
-                self.fan_device.target_env_attr
-            )
-        )
-        is_warmer_outside = self.environment.is_warmer_outside
-        is_fan_air_outside = self.fan_device.fan_air_surce_outside
-
-        # If the fan_hot_tolerance is set, enforce the action for the fan or cooler device
-        # to ignore cycles as we switch between the fan and cooler device
-        # and we want to avoid idle time gaps between the devices
-        force_override = (
-            True if self.environment.fan_hot_tolerance is not None else force
-        )
-
         has_cooler_run_long_enough = (
             self.cooler_device.hvac_controller.ran_long_enough()
         )
-        has_fan_run_long_enough = self.fan_device.hvac_controller.ran_long_enough()
 
         if self.cooler_device.is_on and not has_cooler_run_long_enough:
             _LOGGER.debug(
@@ -204,51 +194,47 @@ class CoolerFanDevice(MultiHvacDevice):
             self.HVACActionReason = HVACActionReason.MIN_CYCLE_DURATION_NOT_REACHED
             return
 
-        # Fix for https://github.com/swingerman/ha-dual-smart-thermostat/issues/385:
-        # the cooler above is protected from being switched off before its
-        # min_cycle_duration elapses, but the fan never was - so it could be
-        # flipped on then immediately back off every time cur_temp ticked
-        # across the fan-tolerance boundary. Apply the same protection here,
-        # symmetrically, before letting the temperature reading move us out
-        # of the fan-only branch.
-        #
-        # Escape hatch (2026-08-12): that protection has no concept of "the
-        # fan clearly isn't holding it" - on a hot day, temp can sail right
-        # past the top of the fan-tolerance band and the house still won't
-        # get the compressor back for the full 15 minutes. If we're urgently
-        # above the band, skip the floor and fall through to the cooler
-        # branch below instead of returning early.
-        if (
-            self.fan_device.is_on
-            and not is_within_fan_tolerance
-            and not has_fan_run_long_enough
-            and not is_urgently_above_fan_tolerance
-        ):
-            _LOGGER.debug(
-                "Fan has not run long enough at: %s",
-                datetime.now(timezone.utc),
-            )
-            self.HVACActionReason = HVACActionReason.MIN_CYCLE_DURATION_NOT_REACHED
-            return
+        # 2026-08-12: fan_hot_tolerance "try fan before AC" comfort band
+        # retired at Kevin's request (was the direct cause of two house-got-
+        # hot incidents the same day - the fan would get picked over the
+        # compressor and, on a hot day, fail to actually hold the target).
+        # The fan's only remaining job in COOL mode is a fixed run-on window
+        # immediately after the cooler satisfies its target, for post-
+        # cooling air circulation - never a substitute for the compressor.
+        now = datetime.now(timezone.utc)
+        in_runon = (
+            self._fan_runon_until is not None and now < self._fan_runon_until
+        )
 
-        if (
-            self._fan_hot_tolerance_on
-            and is_within_fan_tolerance
-            and not (is_fan_air_outside and is_warmer_outside)
-        ):
-            _LOGGER.debug("within fan tolerance")
-            _LOGGER.debug("fan_hot_tolerance_on: %s", self._fan_hot_tolerance_on)
-            _LOGGER.debug("force_override: %s", force_override)
+        was_cooler_active = self.cooler_device.is_active
+        await self.cooler_device.async_control_hvac(time, force)
+        now_cooler_active = self.cooler_device.is_active
 
-            self.fan_device.hvac_mode = HVACMode.FAN_ONLY
-            await self.fan_device.async_control_hvac(time, force_override)
-            if self.cooler_device.is_active:
-                await self.cooler_device.async_turn_off()
-            self.HVACActionReason = HVACActionReason.TARGET_TEMP_NOT_REACHED_WITH_FAN
-        else:
-            _LOGGER.debug("outside fan tolerance")
-            _LOGGER.debug("fan_hot_tolerance_on: %s", self._fan_hot_tolerance_on)
-            await self.cooler_device.async_control_hvac(time, force_override)
+        if was_cooler_active and not now_cooler_active:
+            self._fan_runon_until = now + timedelta(minutes=self._FAN_RUNON_MINUTES)
+            in_runon = True
+        elif now_cooler_active:
+            self._fan_runon_until = None
+
+        if now_cooler_active:
+            _LOGGER.debug("cooler active")
             if self.fan_device.is_active:
                 await self.fan_device.async_turn_off()
-            self.HVACActionReason = self.cooler_device.HVACActionReason
+        elif in_runon:
+            # Bypass the fan's own temperature-strategy control loop here -
+            # async_control_hvac would check "is it still too hot" via the
+            # fan's own strategy, which will say no (the cooler branch above
+            # just confirmed the target's satisfied) and refuse to turn on.
+            # The run-on window itself is the only condition that matters.
+            _LOGGER.debug(
+                "fan run-on until: %s",
+                self._fan_runon_until,
+            )
+            self.fan_device.hvac_mode = HVACMode.FAN_ONLY
+            if not self.fan_device.is_active:
+                await self.fan_device.async_turn_on()
+        else:
+            if self.fan_device.is_active:
+                await self.fan_device.async_turn_off()
+
+        self.HVACActionReason = self.cooler_device.HVACActionReason
