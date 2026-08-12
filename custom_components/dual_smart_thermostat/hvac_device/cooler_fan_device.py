@@ -176,6 +176,11 @@ class CoolerFanDevice(MultiHvacDevice):
         is_within_fan_tolerance = self.environment.is_within_fan_tolerance(
             self.fan_device.target_env_attr
         )
+        is_urgently_above_fan_tolerance = (
+            self.environment.is_urgently_above_fan_tolerance(
+                self.fan_device.target_env_attr
+            )
+        )
         is_warmer_outside = self.environment.is_warmer_outside
         is_fan_air_outside = self.fan_device.fan_air_surce_outside
 
@@ -206,7 +211,19 @@ class CoolerFanDevice(MultiHvacDevice):
         # across the fan-tolerance boundary. Apply the same protection here,
         # symmetrically, before letting the temperature reading move us out
         # of the fan-only branch.
-        if self.fan_device.is_on and not is_within_fan_tolerance and not has_fan_run_long_enough:
+        #
+        # Escape hatch (2026-08-12): that protection has no concept of "the
+        # fan clearly isn't holding it" - on a hot day, temp can sail right
+        # past the top of the fan-tolerance band and the house still won't
+        # get the compressor back for the full 15 minutes. If we're urgently
+        # above the band, skip the floor and fall through to the cooler
+        # branch below instead of returning early.
+        if (
+            self.fan_device.is_on
+            and not is_within_fan_tolerance
+            and not has_fan_run_long_enough
+            and not is_urgently_above_fan_tolerance
+        ):
             _LOGGER.debug(
                 "Fan has not run long enough at: %s",
                 datetime.now(timezone.utc),

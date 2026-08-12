@@ -503,6 +503,33 @@ class EnvironmentManager(StateManager):
             and self._cur_temp <= too_hot_for_fan_temp
         )
 
+    def is_urgently_above_fan_tolerance(self, target_attr="_target_temp") -> bool:
+        """Whether temp has climbed well past the fan-only comfort band.
+
+        ``is_within_fan_tolerance`` picks fan-only over the compressor in a
+        narrow band just above target, on the assumption fan alone can hold
+        it there. When that assumption is wrong (fan running, temp keeps
+        climbing right past the top of that band), the caller's own
+        min_cycle_duration protection on the fan has no escape hatch and
+        will hold fan-only for its full floor regardless - so on a hot day
+        the house can drift for the whole 15 minutes before the compressor
+        is allowed back on. This is that escape hatch: true once temp is a
+        further full fan_hot_tolerance past the band's top edge, mirroring
+        the multiplier-2-tolerance "urgent tier" AutoModeEvaluator already
+        uses for HEAT/COOL mode selection, just applied to this band. Not
+        used to change the initial fan-vs-cooler decision, only to let the
+        fan's own min-cycle floor be skipped once it's clearly not working.
+        """
+        if self._cur_temp is None or self._fan_hot_tolerance is None:
+            return False
+        if self._fan_hot_tolerance <= 0:
+            return False
+        target_temp = getattr(self, target_attr)
+
+        urgent_temp = target_temp + self._hot_tolerance + (2 * self._fan_hot_tolerance)
+
+        return self._cur_temp > urgent_temp
+
     @property
     def is_warmer_outside(self) -> bool:
         """Checks if the outside temperature is warmer or equal than the inside temperature."""
