@@ -1708,6 +1708,19 @@ class DualSmartThermostat(ClimateEntity, RestoreEntity):
         _LOGGER.debug("Attempting to control climate, time %s, force %s", time, force)
 
         async with self._temp_lock:
+            # Kevin, 2026-08-14: dashboard "run the fan for N minutes" boost
+            # (input_select.furnace_fan_boost) drives the fan relay directly
+            # rather than going through a device-tree hvac_mode, since every
+            # mode this integration understands (including FAN_ONLY) ties
+            # relay decisions to its own tolerance/auto-evaluator logic that
+            # a plain manual override has no business fighting. Freeze the
+            # whole control loop - heat/cool/fan all hold their current
+            # relay state untouched - for the boost's duration instead.
+            boost_state = self.hass.states.get("input_boolean.furnace_fan_boost_active")
+            if boost_state is not None and boost_state.state == STATE_ON:
+                _LOGGER.debug("Manual fan boost active, skipping normal HVAC control")
+                return
+
             if self._hvac_mode == HVACMode.AUTO and self._auto_evaluator is not None:
                 await self._async_evaluate_auto_and_dispatch(time=time, force=force)
                 return
