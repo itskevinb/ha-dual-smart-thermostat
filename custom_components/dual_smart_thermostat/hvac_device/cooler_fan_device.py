@@ -3,9 +3,17 @@ import logging
 from typing import Callable
 
 from homeassistant.components.climate import HVACMode
-from homeassistant.const import STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import (
+    CALLBACK_TYPE,
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+)
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+)
 
 from ..hvac_action_reason.hvac_action_reason import HVACActionReason
 from ..hvac_device.generic_hvac_device import GenericHVACDevice
@@ -55,6 +63,7 @@ class CoolerFanDevice(MultiHvacDevice):
 
         self._set_fan_hot_tolerance_on_state()
         self._fan_runon_until: datetime | None = None
+        self._cancel_runon_timer: CALLBACK_TYPE | None = None
 
     def _set_fan_hot_tolerance_on_state(self):
         if self._features.fan_hot_tolerance_on_entity is not None:
@@ -90,6 +99,8 @@ class CoolerFanDevice(MultiHvacDevice):
         _LOGGER.debug("Setter setting hvac_mode: %s", hvac_mode)
         self._hvac_mode = hvac_mode
         self.set_sub_devices_hvac_mode(hvac_mode)
+        if hvac_mode != HVACMode.COOL:
+            self._clear_runon()
 
     async def async_on_startup(self, async_write_ha_state_cb: Callable = None) -> None:
         await super().async_on_startup(async_write_ha_state_cb)
@@ -105,6 +116,72 @@ class CoolerFanDevice(MultiHvacDevice):
                     self._async_fan_hot_tolerance_on_changed,
                 )
             )
+
+        # Start the post-cooling run-on from the cooler relay's own on -> off
+        # event. Reading is_active right after the turn_off call raced the
+        # ESPHome state update, so the run-on never started (review 10-27).
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass,
+                [self.cooler_device.entity_id],
+                self._async_cooler_changed,
+            )
+        )
+        self.async_on_remove(self._clear_runon)
+
+    def _clear_runon(self) -> None:
+        self._fan_runon_until = None
+        if self._cancel_runon_timer is not None:
+            self._cancel_runon_timer()
+            self._cancel_runon_timer = None
+
+    async def _async_cooler_changed(self, event: Event[EventStateChangedData]):
+        old_state = event.data["old_state"]
+        new_state = event.data["new_state"]
+        if old_state is None or new_state is None:
+            return
+
+        if new_state.state == STATE_ON:
+            # Cooling resumed; the cooler branch turns the fan back off.
+            self._clear_runon()
+            return
+
+        if (
+            old_state.state == STATE_ON
+            and new_state.state == STATE_OFF
+            and self._hvac_mode == HVACMode.COOL
+            and not self._fan_on_with_cooler
+        ):
+            self._clear_runon()
+            self._fan_runon_until = datetime.now(timezone.utc) + timedelta(
+                minutes=self._FAN_RUNON_MINUTES
+            )
+            self._cancel_runon_timer = async_call_later(
+                self.hass,
+                self._FAN_RUNON_MINUTES * 60,
+                self._async_runon_finished,
+            )
+            _LOGGER.debug(
+                "Cooler satisfied, fan run-on until %s", self._fan_runon_until
+            )
+            self.fan_device.hvac_mode = HVACMode.FAN_ONLY
+            if not self.fan_device.is_active:
+                await self.fan_device.async_turn_on()
+            if self._async_write_ha_state_cb is not None:
+                self._async_write_ha_state_cb()
+
+    async def _async_runon_finished(self, _now=None) -> None:
+        self._cancel_runon_timer = None
+        self._fan_runon_until = None
+        _LOGGER.debug("Fan run-on finished")
+        if (
+            self._hvac_mode == HVACMode.COOL
+            and not self.cooler_device.is_active
+            and self.fan_device.is_active
+        ):
+            await self.fan_device.async_turn_off()
+        if self._async_write_ha_state_cb is not None:
+            self._async_write_ha_state_cb()
 
     async def _async_fan_hot_tolerance_on_changed(
         self, event: Event[EventStateChangedData]
@@ -201,22 +278,14 @@ class CoolerFanDevice(MultiHvacDevice):
         # The fan's only remaining job in COOL mode is a fixed run-on window
         # immediately after the cooler satisfies its target, for post-
         # cooling air circulation - never a substitute for the compressor.
-        now = datetime.now(timezone.utc)
+        # The run-on window itself is opened by _async_cooler_changed.
+        await self.cooler_device.async_control_hvac(time, force)
         in_runon = (
-            self._fan_runon_until is not None and now < self._fan_runon_until
+            self._fan_runon_until is not None
+            and datetime.now(timezone.utc) < self._fan_runon_until
         )
 
-        was_cooler_active = self.cooler_device.is_active
-        await self.cooler_device.async_control_hvac(time, force)
-        now_cooler_active = self.cooler_device.is_active
-
-        if was_cooler_active and not now_cooler_active:
-            self._fan_runon_until = now + timedelta(minutes=self._FAN_RUNON_MINUTES)
-            in_runon = True
-        elif now_cooler_active:
-            self._fan_runon_until = None
-
-        if now_cooler_active:
+        if self.cooler_device.is_active:
             _LOGGER.debug("cooler active")
             if self.fan_device.is_active:
                 await self.fan_device.async_turn_off()

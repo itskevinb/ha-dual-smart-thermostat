@@ -89,6 +89,7 @@ from .const import (
     CONF_FAN_AIR_OUTSIDE,
     CONF_FAN_HOT_TOLERANCE,
     CONF_FAN_HOT_TOLERANCE_TOGGLE,
+    FAN_BOOST_ENTITY,
     CONF_FAN_MODE,
     CONF_FAN_ON_WITH_AC,
     CONF_FLOOR_SENSOR,
@@ -793,6 +794,14 @@ class DualSmartThermostat(ClimateEntity, RestoreEntity):
                     self.hass, switch_entities, self._async_switch_changed_event
                 )
             )
+
+        # Kevin, 2026-10-27: the fan boost no longer freezes control (FanDevice
+        # just refuses to turn the fan off), so re-evaluate as soon as it ends.
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [FAN_BOOST_ENTITY], self._async_fan_boost_changed
+            )
+        )
 
         # register device's on-remove
         self.async_on_remove(self.hvac_device.call_on_remove_callbacks)
@@ -1708,19 +1717,6 @@ class DualSmartThermostat(ClimateEntity, RestoreEntity):
         _LOGGER.debug("Attempting to control climate, time %s, force %s", time, force)
 
         async with self._temp_lock:
-            # Kevin, 2026-08-14: dashboard "run the fan for N minutes" boost
-            # (input_select.furnace_fan_boost) drives the fan relay directly
-            # rather than going through a device-tree hvac_mode, since every
-            # mode this integration understands (including FAN_ONLY) ties
-            # relay decisions to its own tolerance/auto-evaluator logic that
-            # a plain manual override has no business fighting. Freeze the
-            # whole control loop - heat/cool/fan all hold their current
-            # relay state untouched - for the boost's duration instead.
-            boost_state = self.hass.states.get("input_boolean.furnace_fan_boost_active")
-            if boost_state is not None and boost_state.state == STATE_ON:
-                _LOGGER.debug("Manual fan boost active, skipping normal HVAC control")
-                return
-
             if self._hvac_mode == HVACMode.AUTO and self._auto_evaluator is not None:
                 await self._async_evaluate_auto_and_dispatch(time=time, force=force)
                 return
@@ -1737,6 +1733,14 @@ class DualSmartThermostat(ClimateEntity, RestoreEntity):
 
             self._hvac_action_reason = self.hvac_device.HVACActionReason
             self._publish_hvac_action_reason(self._hvac_action_reason)
+
+    async def _async_fan_boost_changed(
+        self, event: Event[EventStateChangedData]
+    ) -> None:
+        new_state = event.data["new_state"]
+        if new_state is not None and new_state.state != STATE_ON:
+            await self._async_control_climate()
+            self.async_write_ha_state()
 
     async def _async_control_climate_forced(self, time=None) -> None:
         """Forcefully control the climate device based on config."""

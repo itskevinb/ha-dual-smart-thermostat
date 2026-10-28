@@ -503,7 +503,6 @@ class EnvironmentManager(StateManager):
             and self._cur_temp <= too_hot_for_fan_temp
         )
 
-
     @property
     def is_warmer_outside(self) -> bool:
         """Checks if the outside temperature is warmer or equal than the inside temperature."""

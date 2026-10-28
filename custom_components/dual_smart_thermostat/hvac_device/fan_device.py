@@ -2,9 +2,10 @@ from datetime import timedelta
 import logging
 
 from homeassistant.components.climate import HVACAction, HVACMode
+from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
 
-from ..const import FAN_MODE_TO_PERCENTAGE
+from ..const import FAN_BOOST_ENTITY, FAN_MODE_TO_PERCENTAGE
 from ..hvac_device.cooler_device import CoolerDevice
 from ..managers.environment_manager import EnvironmentManager
 from ..managers.feature_manager import FeatureManager
@@ -204,6 +205,16 @@ class FanDevice(CoolerDevice):
                     self.entity_id,
                     e,
                 )
+
+    async def async_turn_off(self):
+        """Turn off the fan, unless a manual fan boost is holding it on."""
+        # Kevin, 2026-10-27: every fan turn-off (controller, run-on, mode
+        # change, turn_off_all) lands here, so the boost only has to be
+        # respected in one place and heat/cool control keeps running.
+        if self.hass.states.is_state(FAN_BOOST_ENTITY, STATE_ON):
+            _LOGGER.debug("Fan boost active, leaving fan %s on", self.entity_id)
+            return
+        await super().async_turn_off()
 
     @property
     def hvac_action(self) -> HVACAction:

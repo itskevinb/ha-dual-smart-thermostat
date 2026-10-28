@@ -27,6 +27,11 @@ DOMAIN = "dual_smart_thermostat"
 CONF_SYSTEM_TYPE = "system_type"
 
 
+# Kevin, 2026-10-27: dashboard fan boost (input_select.furnace_fan_boost
+# automations) holds this on while it runs the fan relay directly.
+FAN_BOOST_ENTITY = "input_boolean.furnace_fan_boost_active"
+
+
 class SystemType(enum.StrEnum):
     """System type enumeration for dual smart thermostat."""
 

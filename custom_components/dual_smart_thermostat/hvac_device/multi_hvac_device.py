@@ -213,6 +213,13 @@ class MultiHvacDevice(HVACDevice, ControlableHVACDevice):
 
             # self._hvac_action_reason = device.HVACActionReason
 
+    @callback
+    def call_on_remove_callbacks(self) -> None:
+        """Also release listeners the sub-devices registered."""
+        super().call_on_remove_callbacks()
+        for device in self.hvac_devices:
+            device.call_on_remove_callbacks()
+
     async def async_on_startup(self, async_write_ha_state_cb: Callable = None):
         self._async_write_ha_state_cb = async_write_ha_state_cb
         for device in self.hvac_devices:
