@@ -8,7 +8,7 @@ from datetime import timedelta
 
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components import input_boolean
-from homeassistant.components.climate import HVACMode
+from homeassistant.components.climate import HVACAction, HVACMode
 from homeassistant.components.climate.const import DOMAIN as CLIMATE
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
@@ -191,3 +191,49 @@ async def test_boost_blocks_runon_turning_fan_off(
     common.async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert _state(hass, FAN) == STATE_ON
+
+
+def _action(hass: HomeAssistant) -> str:
+    return hass.states.get(common.ENTITY).attributes["hvac_action"]
+
+
+async def test_boost_reports_fan_action_with_mode_off(
+    hass: HomeAssistant,
+    setup_comp_1,  # noqa: F811
+) -> None:
+    # Patio-door hold: mode off, then a boost runs the fan relay directly.
+    await _setup(hass, HVACMode.OFF)
+    setup_sensor(hass, 22)
+    await hass.async_block_till_done()
+    assert _action(hass) == HVACAction.OFF
+
+    await _set(hass, FAN_BOOST_ENTITY, True)
+    await _set(hass, FAN, True)
+    assert _action(hass) == HVACAction.FAN
+
+    await _set(hass, FAN, False)
+    await _set(hass, FAN_BOOST_ENTITY, False)
+    assert _action(hass) == HVACAction.OFF
+
+
+async def test_boost_reports_fan_action_when_idle_but_heating_wins(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    setup_comp_1,  # noqa: F811
+) -> None:
+    await _setup(hass, HVACMode.HEAT)
+    setup_sensor(hass, 22)
+    await common.async_set_temperature(hass, 21)
+    await hass.async_block_till_done()
+    assert _action(hass) == HVACAction.IDLE
+
+    await _set(hass, FAN_BOOST_ENTITY, True)
+    await _set(hass, FAN, True)
+    assert _action(hass) == HVACAction.FAN
+
+    # Heat call mid-boost: the card shows heating, not fan.
+    freezer.tick(timedelta(minutes=16))
+    setup_sensor(hass, 20)
+    await hass.async_block_till_done()
+    assert _state(hass, HEATER) == STATE_ON
+    assert _action(hass) == HVACAction.HEATING

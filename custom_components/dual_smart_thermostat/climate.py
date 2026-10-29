@@ -1087,7 +1087,16 @@ class DualSmartThermostat(ClimateEntity, RestoreEntity):
     @property
     def hvac_action(self) -> HVACAction:
         """Return the current running hvac operation if supported."""
-        return self.hvac_device.hvac_action
+        action = self.hvac_device.hvac_action
+        # Kevin, 2026-10-29: the fan boost drives the fan relay directly, so
+        # report FAN whenever the blower runs on its own, even with mode off.
+        if action in (HVACAction.OFF, HVACAction.IDLE):
+            fan_device = self.features.fan_device
+            if fan_device is not None and self.hass.states.is_state(
+                fan_device.entity_id, STATE_ON
+            ):
+                return HVACAction.FAN
+        return action
 
     @property
     def target_temperature(self) -> float | None:
