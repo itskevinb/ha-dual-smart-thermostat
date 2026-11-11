@@ -28,6 +28,17 @@ if not libname:
 _pcap = CDLL(libname)
 
 
+def _geterr(handle):
+    """Return pcap_geterr's message for handle, or 'unknown' if unavailable."""
+    try:
+        _pcap.pcap_geterr.argtypes = [c_void_p]
+        _pcap.pcap_geterr.restype = c_char_p
+        msg = _pcap.pcap_geterr(handle)
+    except Exception:
+        return "unknown"
+    return msg.decode(errors="ignore") if msg else "unknown"
+
+
 class PcapBpfProgram(Structure):
     _fields_ = [("bf_len", c_uint), ("bf_insns", c_void_p)]
 
@@ -122,15 +133,7 @@ class Pcap:
         )
         if res != 0:
             # attempt to get error via pcap_geterr if present
-            try:
-                _pcap.pcap_geterr.argtypes = [c_void_p]
-                _pcap.pcap_geterr.restype = c_char_p
-                msg = _pcap.pcap_geterr(self._p)
-                raise OSError(
-                    f"pcap_compile failed: {msg.decode() if msg else 'unknown'}"
-                )
-            except Exception:
-                raise OSError("pcap_compile failed")
+            raise OSError(f"pcap_compile failed: {_geterr(self._p)}")
         return prog
 
     def setfilter(self, prog):
@@ -162,13 +165,9 @@ def compile_filter_on_device(filter_expr):
     res = _pcap.pcap_compile(dead, byref(prog), filter_expr.encode(), 1, 0xFFFFFFFF)
     if res != 0:
         # try to get error
-        try:
-            _pcap.pcap_geterr.argtypes = [c_void_p]
-            _pcap.pcap_geterr.restype = c_char_p
-            msg = _pcap.pcap_geterr(dead)
-            raise OSError(f"pcap_compile failed: {msg.decode() if msg else 'unknown'}")
-        except Exception:
-            raise OSError("pcap_compile failed")
+        err = _geterr(dead)
+        _pcap.pcap_close(dead)
+        raise OSError(f"pcap_compile failed: {err}")
     _pcap.pcap_freecode(byref(prog))
     # close dead handle if pcap_close exists
     try:

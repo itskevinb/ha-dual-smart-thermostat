@@ -3,6 +3,34 @@
 
 import json
 import os
+import sys
+
+STORAGE_DIR = "/workspaces/dual_smart_thermostat/config/.storage"
+DOMAIN = "dual_smart_thermostat"
+
+
+def get_config_entry_ids():
+    """Return the config entry IDs that belong to dual_smart_thermostat.
+
+    The device registry stores opaque config entry IDs, so they have to be
+    resolved from core.config_entries before devices can be matched.
+    """
+    file_path = os.path.join(STORAGE_DIR, "core.config_entries")
+
+    if not os.path.exists(file_path):
+        sys.exit(
+            f"Config entries file not found ({file_path}); "
+            "cannot match devices to dual_smart_thermostat"
+        )
+
+    with open(file_path, "r") as f:
+        data = json.load(f)
+
+    return {
+        entry["entry_id"]
+        for entry in data["data"]["entries"]
+        if entry.get("domain") == DOMAIN
+    }
 
 
 def clean_entity_registry():
@@ -43,14 +71,15 @@ def clean_device_registry():
     with open(file_path, "r") as f:
         data = json.load(f)
 
-    # Filter out dual_smart_thermostat devices
+    entry_ids = get_config_entry_ids()
+
+    # Filter out devices linked to a dual_smart_thermostat config entry
     original_count = len(data["data"]["devices"])
     data["data"]["devices"] = [
         device
         for device in data["data"]["devices"]
         if not any(
-            "dual_smart_thermostat" in entry_id
-            for entry_id in device.get("config_entries", [])
+            entry_id in entry_ids for entry_id in device.get("config_entries", [])
         )
     ]
     new_count = len(data["data"]["devices"])

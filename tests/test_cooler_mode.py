@@ -3,6 +3,7 @@
 import datetime
 from datetime import timedelta
 import logging
+from unittest.mock import MagicMock
 
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components import input_boolean, input_number
@@ -36,7 +37,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from homeassistant.util.unit_system import METRIC_SYSTEM
+from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
 import pytest
 
 from custom_components.dual_smart_thermostat.const import (
@@ -44,6 +45,7 @@ from custom_components.dual_smart_thermostat.const import (
     ATTR_HVAC_POWER_LEVEL,
     ATTR_HVAC_POWER_PERCENT,
     ATTR_PREV_TARGET,
+    CONF_HVAC_POWER_TOLERANCE,
     DOMAIN,
     PRESET_ANTI_FREEZE,
 )
@@ -52,6 +54,9 @@ from custom_components.dual_smart_thermostat.hvac_action_reason.hvac_action_reas
 )
 from custom_components.dual_smart_thermostat.hvac_action_reason.hvac_action_reason_internal import (
     HVACActionReasonInternal,
+)
+from custom_components.dual_smart_thermostat.managers.hvac_power_manager import (
+    HvacPowerManager,
 )
 
 from . import (  # noqa: F401
@@ -1956,3 +1961,29 @@ async def test_cooler_valve_min_cycle_no_keep_alive(
     setup_sensor(hass, 22)
     await hass.async_block_till_done()
     assert SERVICE_CLOSE_VALVE in [c.service for c in calls]
+
+
+def _power_manager(units, config=None):
+    hass = MagicMock()
+    hass.config.units = units
+    return HvacPowerManager(hass, config or {}, MagicMock())
+
+
+@pytest.mark.parametrize(
+    ("units", "is_temperature", "expected"),
+    [
+        (METRIC_SYSTEM, True, 1),
+        (METRIC_SYSTEM, False, 1),
+        # 1 °C as a temperature difference is 1.8 °F, not 33.8 °F
+        (US_CUSTOMARY_SYSTEM, True, 1.8),
+        (US_CUSTOMARY_SYSTEM, False, 1),
+    ],
+)
+def test_default_hvac_power_tolerance(units, is_temperature, expected):
+    """Default tolerance is 1 °C, or 1.8 °F (a delta) on US customary units."""
+    assert _power_manager(units)._get_hvac_power_tolerance(is_temperature) == expected
+
+
+def test_configured_hvac_power_tolerance_wins():
+    manager = _power_manager(US_CUSTOMARY_SYSTEM, {CONF_HVAC_POWER_TOLERANCE: 4.0})
+    assert manager._get_hvac_power_tolerance(True) == 4.0

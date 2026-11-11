@@ -77,12 +77,14 @@ class HvacPowerManager:
     def hvac_power_percent(self) -> int:
         return self._hvac_power_percent
 
-    def _get_hvac_power_tolerance(self, is_temperature: bool) -> int:
+    def _get_hvac_power_tolerance(self, is_temperature: bool) -> float:
         """handles the default value for the hvac power tolerance
         based on the unit system and the environment attribute"""
 
         is_imperial = self.hass.config.units is US_CUSTOMARY_SYSTEM
-        default_imperial_tolerance = 33
+        # The tolerance is a temperature difference, so 1 °C maps to 1.8 °F
+        # (not the absolute conversion 33.8 °F).
+        default_imperial_tolerance = 1.8
         default_metric_tolerance = 1
 
         default_temperatue_tolerance = (
