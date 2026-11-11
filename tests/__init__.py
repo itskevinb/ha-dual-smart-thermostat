@@ -15,7 +15,7 @@ from homeassistant.components.climate import (
     PRESET_SLEEP,
     HVACMode,
 )
-from homeassistant.components.valve import ValveEntityFeature
+from homeassistant.components.valve import DOMAIN as VALVE_DOMAIN, ValveEntityFeature
 from homeassistant.const import (
     SERVICE_CLOSE_VALVE,
     SERVICE_OPEN_VALVE,
@@ -1340,8 +1340,8 @@ def setup_valve(hass: HomeAssistant, is_open: bool) -> None:
         """Log service calls."""
         calls.append(call)
 
-    hass.services.async_register(ha.DOMAIN, SERVICE_OPEN_VALVE, log_call)
-    hass.services.async_register(ha.DOMAIN, SERVICE_CLOSE_VALVE, log_call)
+    hass.services.async_register(VALVE_DOMAIN, SERVICE_OPEN_VALVE, log_call)
+    hass.services.async_register(VALVE_DOMAIN, SERVICE_CLOSE_VALVE, log_call)
 
     return calls
 

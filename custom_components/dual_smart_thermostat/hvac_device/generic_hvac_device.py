@@ -366,7 +366,7 @@ class GenericHVACDevice(
 
         try:
             await self.hass.services.async_call(
-                HA_DOMAIN,
+                VALVE_DOMAIN,
                 SERVICE_OPEN_VALVE,
                 {ATTR_ENTITY_ID: self.entity_id},
                 context=self._context,
@@ -381,7 +381,7 @@ class GenericHVACDevice(
 
         try:
             await self.hass.services.async_call(
-                HA_DOMAIN,
+                VALVE_DOMAIN,
                 SERVICE_CLOSE_VALVE,
                 {ATTR_ENTITY_ID: self.entity_id},
                 context=self._context,
